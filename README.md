@@ -1,12 +1,21 @@
+# Project Goal
+This Go program will run `vector` as a subprocess and communicate with it via
+two unix domain sockets.
+On one socket, the program will feed log data to vector.
+On the other socket, the program will consume the vector output and measure throughput.
+
+## Status
+Code is written and vector starts, however I'm not sure if vector is running properly.
+There seems to be no output coming through the vector output socket and the vector `stdout` pipe
+that is attached to a reader is not emitting any logs.
 
 
 ## Target Configuration
 - Start vector with a 'source' and 'sink' that both point to local unix domain sockets
 - Data will be fed in via `go-vector-input.sock` as JSON logs
 - Data will be emitted to an output socket `go-vector-result.sock`
-- TODO - configure desired VRL program
 
-### Simple socket-in, socket-out
+### Manual Configuration
 Vector config:
 ```
 [sources.from-the-agent]

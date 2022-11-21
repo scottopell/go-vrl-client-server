@@ -2,13 +2,13 @@
 type = "socket"
 mode = "unix_stream"
 decoding.codec = "json"
-path = "/tmp/go-vector-input.sock"
+path = "{{.VectorInputSocket}}"
 
 [transforms.remap_agentlogs]
 inputs = [ "from-the-agent"]
 type = "remap"
 source = '''
-    . = replace(string!(.message), r'\b\w{4}\b', "rust")
+{{ .VRLProgram }}
 '''
 
 [sinks.back-to-the-agent]
@@ -16,9 +16,4 @@ type = "socket"
 inputs = ["remap_agentlogs"]
 mode = "unix"
 encoding.codec = "json"
-path = "/tmp/go-vector-result.sock"
-
-#[sinks.stdout]
-#type = "console"
-#inputs = ["remap_agentlogs"]
-#encoding.codec = "text"
+path = "{{.VectorOutputSocket}}"
