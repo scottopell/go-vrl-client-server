@@ -1,0 +1,19 @@
+[sources.from-the-agent]
+type = "socket"
+mode = "unix_stream"
+decoding.codec = "json"
+path = "/tmp/go-vector-input.sock"
+
+[transforms.remap_agentlogs]
+inputs = [ "from-the-agent"]
+type = "remap"
+source = '''
+    . = replace(string!(.message), r'\b\w{4}\b', "rust")
+'''
+
+[sinks.back-to-the-agent]
+type = "socket"
+inputs = ["remap_agentlogs"]
+mode = "unix"
+encoding.codec = "json"
+path = "/tmp/go-vector-result.sock"
