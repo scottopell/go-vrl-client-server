@@ -4,11 +4,17 @@ two unix domain sockets.
 On one socket, the program will feed log data to vector.
 On the other socket, the program will consume the vector output and measure throughput.
 
-## Status
-Code is written and vector starts, however I'm not sure if vector is running properly.
-There seems to be no output coming through the vector output socket and the vector `stdout` pipe
-that is attached to a reader is not emitting any logs.
+## Building/Running
+```
+git clone --recurse-submodules  git@github.com:scottopell/go-vrl-client-server.gitc
+cd go-vrl-client-server/vector
+cargo build --release
+cd ..
+go run .
+```
 
+## Status
+Vector is correctly started and processes logs, initial testing shows a throughput of ~180mb/s
 
 ## Target Configuration
 - Start vector with a 'source' and 'sink' that both point to local unix domain sockets
