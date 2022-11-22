@@ -3,21 +3,21 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"time"
 )
 
 const (
-	fakeLogLine = "Oct 17 14:33:33 | XSS | ERROR | (/viral/interactive/deliverables/holistic.go:3) | sed et dolorem minima et corrupti abcd veniam qui blanditiis optio explicabo et amet qui sint ut iure neque eveniet quod odio distinctio quas veniam voluptatibus quibusdam esse maiores dolores magni numquam sed deserunt quia odio fuga deserunt cumque a aliquam ad dolores dolore aut sapiente necessitatibus ut autem necessitatibus quam eveniet et omnis aut quos dolorem culpa nostrum quas provident tempora voluptate iure quos iste consequatur minima accusantium molestiae consequatur perspiciatis quis quia at incidunt non veritatis deserunt totam iure autem asperiores rerum officiis iusto et explicabo sunt et rerum molestiae hic dolore neque eum vel rerum perspiciatis autem et consequuntur consequatur aliquam dolore magni ea est illum accusamus rerum magnam neque odio voluptatibus est temporibus quo ullam nobis soluta quo ipsum temporibus perferendis et esse repellendus ea id explicabo nostrum repellat vero perferendis possimus optio consectetur deserunt aspern"
-	Purple      = "\033[35m"
-	Reset       = "\033[0m"
+	fakeLogLine = "Oct 17 14:33:33 | XSS | ERROR | (/viral/interactive/deliverables/holistic.go:3) | sed et dolorem minima et corrupti abcd veniam qui blanditiis optio explicabo et amet qui sint ut iure neque eveniet quod odio distinctio quas veniam voluptatibus quibusdam esse maiores dolores magni numquam sed deserunt quia odio fuga deserunt cumque a aliquam ad dolores dolore aut sapiente necessitatibus ut autem necessitatibus quam eveniet et omnis aut quos dolorem culpa nostrum quas provident tempora voluptate iure quos iste consequatur minima accusantium molestiae consequatur perspiciatis quis quia at incidunt non veritatis deserunt totam iure autem asperiores rerum officiis iusto et explicabo sunt et rerum molestiae hic dolore neque eum vel rerum perspiciatis autem et consequuntur consequatur aliquam dolore magni ea est illum accusamus rerum magnam neque odio voluptatibus est temporibus quo ullam nobis soluta quo ipsum temporibus perferendis et esse repellendus ea id explicabo nostrum repellat vero perferendis possimus optio consectetur deserunt aspern\n"
 )
 
-func listenForeverAndPrintThroughput(reader *bufio.Reader) {
+func listenForeverAndPrintThroughput(conn *net.UnixConn) {
 	blackhole := BlackholeRecorder[[]byte]{}
 
 	go func() {
@@ -27,16 +27,21 @@ func listenForeverAndPrintThroughput(reader *bufio.Reader) {
 		}
 	}()
 
+	buf := make([]byte, 1024)
+
 	for {
-		line, _, err := reader.ReadLine()
-		if err == io.EOF {
+		nRead, _, err := conn.ReadFromUnix(buf)
+		if nRead == 0 {
 			// Nothing to read
+		} else if err == io.EOF {
+			log.Println("Closing connection, got EOF.")
+			conn.Close()
 		} else if err != nil {
+			fmt.Println("Error while reading, error:", err)
 			log.Panicln(err)
 		} else {
 			// Read something useful
-			blackhole.Consume(line)
-			fmt.Println(string(line))
+			blackhole.Consume(buf)
 		}
 	}
 }
@@ -52,10 +57,12 @@ func startVectorWithConfig(config string) (*exec.Cmd, *bytes.Buffer, error) {
 	}
 	log.Printf("Starting Vector with arg '-c %s'\n", tempConfigFile.Name())
 	cmd := exec.Command("./vector/target/release/vector", "-c", tempConfigFile.Name())
+	// TODO once I'm confident in the behavior of the vector subprocess, enable this
 	// defer os.Remove(tempConfigFile.Name())
 
 	var output bytes.Buffer
 	cmd.Stdout = &output
+	cmd.Stderr = &output
 
 	err = cmd.Start()
 	if err != nil {
@@ -65,54 +72,81 @@ func startVectorWithConfig(config string) (*exec.Cmd, *bytes.Buffer, error) {
 	return cmd, &output, nil
 }
 
-func sendFakeLogDataForever(wr io.Writer) {
-	for {
-		wr.Write([]byte(fakeLogLine))
-	}
-}
-
-func main() {
-	config := GenerateVectorConfig()
-
-	log.Println("Going to start vector...")
-	cmd, stdoutBytes, err := startVectorWithConfig(config)
-	if err != nil {
-		log.Panicln(err)
-	}
+func PrintVectorOutputAndListenForDeath(cmd *exec.Cmd, stdoutAndStderrBytes *bytes.Buffer) {
 	log.Printf("Vector has started succesfully, running in PID %d\n", cmd.Process.Pid)
 
 	go func() {
-		//fmt.Println("Vector output will be printed in " + Purple + "Purple" + Reset)
-		fmt.Println("Vector output:")
 		for {
-			if stdoutBytes.Len() > 0 {
-				line, err := stdoutBytes.ReadString('\n')
-				if err == nil {
-					fmt.Println("vector:", err)
+			if stdoutAndStderrBytes.Len() > 0 {
+				line, err := stdoutAndStderrBytes.ReadString('\n')
+				if err != nil && err != io.EOF {
+					log.Println("vector err:", err)
 				} else {
-					fmt.Println("vector: ", line)
+					fmt.Println("\t", line)
 				}
+			}
+			if cmd.ProcessState != nil {
+				log.Println("Vector Has Exited! ProcessState: ", cmd.ProcessState)
+				os.Exit(1)
 			}
 		}
 	}()
 
-	// By this point vector should have already started or will start shortly, so
-	// open a socket and wait for vector to connect
-	reader, err := ListenOnUDSSocket(vectorOutputSocketPath)
+	go func() {
+		err := cmd.Wait()
+		if err != nil {
+			log.Panicln("Vector exited with non-nil error:", err)
+		} else {
+			log.Println("Vector exited normally.")
+		}
+	}()
+}
+
+func sendFakeLogDataForever(wr *bufio.Writer, errChan chan error) {
+	log.Println("Sending Fake Log Data to input socket")
+	data := []byte(fakeLogLine)
+	dataLen := len(data)
+	for {
+		n, err := wr.Write(data)
+		if err != nil {
+			errChan <- err
+		}
+		if n != dataLen {
+			errChan <- errors.New("did not successfully write all data to the socket")
+		}
+		err = wr.Flush()
+		if err != nil {
+			errChan <- err
+		}
+	}
+}
+
+func main() {
+	errChan := make(chan error)
+	config := GenerateVectorConfig()
+
+	// Listen on the vector output socket path and accept any connections
+	go ListenOnUDSSocket(vectorOutputSocketPath, listenForeverAndPrintThroughput, errChan)
+
+	log.Println("Going to start vector...")
+	cmd, stdoutAndStderrBytes, err := startVectorWithConfig(config)
 	if err != nil {
 		log.Panicln(err)
 	}
+	defer cmd.Process.Kill()
 
-	// Once vector connects, listen and print throughput stats
-	go listenForeverAndPrintThroughput(reader)
+	PrintVectorOutputAndListenForDeath(cmd, stdoutAndStderrBytes)
 
-	// Once vector has connected to `vectorOutputSocketPath`,
-	// lets try 5 times to connect to `vectorInputSocketPath`
-	// Connect to vector input socket and start sending data
+	// Connect to vector's input socket with 5 retries (timing)
 	writer, err := ConnectToUDSSocket(vectorInputSocketPath, 5)
 	if err != nil {
 		log.Panicln(err)
 	}
 
-	sendFakeLogDataForever(writer)
+	go sendFakeLogDataForever(writer, errChan)
+
+	anyErr := <-errChan
+	if anyErr != nil {
+		log.Panicln(anyErr)
+	}
 }

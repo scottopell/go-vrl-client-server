@@ -3,37 +3,45 @@ package main
 import (
 	"bufio"
 	"errors"
-	"io"
 	"log"
 	"net"
 	"os"
 	"time"
 )
 
-func ListenOnUDSSocket(path string) (*bufio.Reader, error) {
+func ListenOnUDSSocket(path string, handler func(*net.UnixConn), errChan chan error) {
 	if _, err := os.Stat(path); err == nil {
 		if err := os.RemoveAll(path); err != nil {
-			return nil, err
+			errChan <- err
+			return
 		}
 	}
 
-	listener, err := net.Listen("unix", path)
+	unixAddr, err := net.ResolveUnixAddr("unix", path)
 	if err != nil {
-		return nil, err
+		errChan <- err
+		return
 	}
 
-	log.Printf("Waiting for connection on socket %s...", path)
-	conn, err := listener.Accept()
+	listener, err := net.ListenUnix("unix", unixAddr)
 	if err != nil {
-		return nil, err
+		errChan <- err
+		return
 	}
 
-	log.Print("Accepted connection from ", conn.RemoteAddr().Network())
-
-	return bufio.NewReader(conn), nil
+	for {
+		log.Printf("Waiting for connection on socket %q...", path)
+		conn, err := listener.AcceptUnix()
+		if err != nil {
+			errChan <- err
+			return
+		}
+		log.Printf("Accepted connection on socket %q from %q. Starting handler.", path, conn.RemoteAddr().Network())
+		go handler(conn)
+	}
 }
 
-func ConnectToUDSSocket(path string, numRetries int) (io.Writer, error) {
+func ConnectToUDSSocket(path string, numRetries int) (*bufio.Writer, error) {
 	addr, err := net.ResolveUnixAddr("unix", path)
 	if err != nil {
 		return nil, err
@@ -45,7 +53,7 @@ func ConnectToUDSSocket(path string, numRetries int) (io.Writer, error) {
 		log.Print("Dialing specified addr:", addr)
 		conn, err = net.DialUnix("unix", nil, addr)
 		if err != nil {
-			log.Println("Dial resulted in error: ", err)
+			log.Println("Dial resulted in error:", err)
 		} else {
 			break
 		}
@@ -55,7 +63,7 @@ func ConnectToUDSSocket(path string, numRetries int) (io.Writer, error) {
 	if conn == nil {
 		return nil, errors.New("retries exceeded, no dials to %s were successful")
 	}
-	log.Println("Connected to ", addr)
+	log.Println("Dial connected to", addr)
 
 	return bufio.NewWriter(conn), nil
 }
