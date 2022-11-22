@@ -19,11 +19,20 @@ const (
 
 func listenForeverAndPrintThroughput(conn *net.UnixConn) {
 	blackhole := BlackholeRecorder[[]byte]{}
+	connEmptyByteChecks := 0
 
 	go func() {
 		for {
-			log.Println(blackhole.AvgThroughput())
-			time.Sleep(3 * time.Second)
+			log.Println(conn, blackhole.AvgThroughput())
+			if blackhole.totalBytes.Load() == 0 {
+				connEmptyByteChecks++
+			}
+			if connEmptyByteChecks > 5 {
+				log.Println("No data on this connection. Closing connection...")
+				conn.Close()
+				break
+			}
+			time.Sleep(1 * time.Second)
 		}
 	}()
 
@@ -72,7 +81,7 @@ func startVectorWithConfig(config string) (*exec.Cmd, *bytes.Buffer, error) {
 	return cmd, &output, nil
 }
 
-func PrintVectorOutputAndListenForDeath(cmd *exec.Cmd, stdoutAndStderrBytes *bytes.Buffer) {
+func waitAndPrintOutput(cmd *exec.Cmd, stdoutAndStderrBytes *bytes.Buffer) {
 	log.Printf("Vector has started succesfully, running in PID %d\n", cmd.Process.Pid)
 
 	go func() {
@@ -87,7 +96,7 @@ func PrintVectorOutputAndListenForDeath(cmd *exec.Cmd, stdoutAndStderrBytes *byt
 			}
 			if cmd.ProcessState != nil {
 				log.Println("Vector Has Exited! ProcessState: ", cmd.ProcessState)
-				panic("Vector Quit.")
+				panic("Vector Exited.")
 			}
 		}
 	}()
@@ -135,7 +144,7 @@ func main() {
 	}
 	defer cmd.Process.Kill()
 
-	PrintVectorOutputAndListenForDeath(cmd, stdoutAndStderrBytes)
+	waitAndPrintOutput(cmd, stdoutAndStderrBytes)
 
 	// Connect to vector's input socket with 5 retries (timing)
 	writer, err := ConnectToUDSSocket(vectorInputSocketPath, 5)
