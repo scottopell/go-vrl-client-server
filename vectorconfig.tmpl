@@ -1,7 +1,10 @@
+[api]
+enabled = true
+
 [sources.from-the-agent]
 type = "socket"
 mode = "unix_stream"
-decoding.codec = "json"
+decoding.codec = "bytes"
 path = "{{.VectorInputSocket}}"
 
 [transforms.remap_agentlogs]
@@ -15,5 +18,5 @@ source = '''
 type = "socket"
 inputs = ["remap_agentlogs"]
 mode = "unix"
-encoding.codec = "json"
+encoding.codec = "text"
 path = "{{.VectorOutputSocket}}"
