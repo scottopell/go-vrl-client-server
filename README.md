@@ -15,11 +15,12 @@ go run .
 
 ## Status
 Vector is correctly started and processes logs, initial testing shows a throughput of ~180mb/s
-
-## Target Configuration
-- Start vector with a 'source' and 'sink' that both point to local unix domain sockets
-- Data will be fed in via `go-vector-input.sock` as JSON logs
-- Data will be emitted to an output socket `go-vector-result.sock`
+Two main issues remain:
+- It appears that vector connects to the unix socket configured as the "sink" twice, the first connection
+  doesn't appear to do anything and the second connection is where we see the log data coming through.
+  I have no idea what this first connection is doing or why it exists.
+- Ensure that if the go program exits unexpectedly, that vector still has a chance to clean itself up
+  There are shutdown bugs that leave the old input socket around (ie, vector did not clean it up)
 
 ### Manual Configuration
 Vector config:
