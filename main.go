@@ -87,7 +87,7 @@ func PrintVectorOutputAndListenForDeath(cmd *exec.Cmd, stdoutAndStderrBytes *byt
 			}
 			if cmd.ProcessState != nil {
 				log.Println("Vector Has Exited! ProcessState: ", cmd.ProcessState)
-				os.Exit(1)
+				panic("Vector Quit.")
 			}
 		}
 	}()
