@@ -2,7 +2,7 @@ package main
 
 import (
 	"bufio"
-	"errors"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -61,7 +61,7 @@ func ConnectToUDSSocket(path string, numRetries int) (*bufio.Writer, error) {
 	}
 
 	if conn == nil {
-		return nil, errors.New("retries exceeded, no dials to %s were successful")
+		return nil, fmt.Errorf("retries exceeded, no dials to %s were successful", path)
 	}
 	log.Println("Dial connected to", addr)
 

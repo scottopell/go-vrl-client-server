@@ -2,14 +2,13 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
-	"os/exec"
+	"os/signal"
 	"time"
 )
 
@@ -55,62 +54,6 @@ func listenForeverAndPrintThroughput(conn *net.UnixConn) {
 	}
 }
 
-func startVectorWithConfig(config string) (*exec.Cmd, *bytes.Buffer, error) {
-	tempConfigFile, err := os.CreateTemp("", "VectorDynamicConfig")
-	if err != nil {
-		return nil, nil, err
-	}
-	_, err = tempConfigFile.WriteString(config)
-	if err != nil {
-		return nil, nil, err
-	}
-	log.Printf("Starting Vector with arg '-c %s'\n", tempConfigFile.Name())
-	cmd := exec.Command("./vector/target/release/vector", "-c", tempConfigFile.Name())
-	// TODO once I'm confident in the behavior of the vector subprocess, enable this
-	// defer os.Remove(tempConfigFile.Name())
-
-	var output bytes.Buffer
-	cmd.Stdout = &output
-	cmd.Stderr = &output
-
-	err = cmd.Start()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return cmd, &output, nil
-}
-
-func waitAndPrintOutput(cmd *exec.Cmd, stdoutAndStderrBytes *bytes.Buffer) {
-	log.Printf("Vector has started succesfully, running in PID %d\n", cmd.Process.Pid)
-
-	go func() {
-		for {
-			if stdoutAndStderrBytes.Len() > 0 {
-				line, err := stdoutAndStderrBytes.ReadString('\n')
-				if err != nil && err != io.EOF {
-					log.Println("vector err:", err)
-				} else {
-					fmt.Println("\t", line)
-				}
-			}
-			if cmd.ProcessState != nil {
-				log.Println("Vector Has Exited! ProcessState: ", cmd.ProcessState)
-				panic("Vector Exited.")
-			}
-		}
-	}()
-
-	go func() {
-		err := cmd.Wait()
-		if err != nil {
-			log.Panicln("Vector exited with non-nil error:", err)
-		} else {
-			log.Println("Vector exited normally.")
-		}
-	}()
-}
-
 func sendFakeLogDataForever(wr *bufio.Writer, errChan chan error) {
 	log.Println("Sending Fake Log Data to input socket")
 	data := []byte(fakeLogLine)
@@ -132,19 +75,26 @@ func sendFakeLogDataForever(wr *bufio.Writer, errChan chan error) {
 
 func main() {
 	errChan := make(chan error)
-	config := GenerateVectorConfig()
+	shutdownChan := make(chan struct{})
+
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
+		<-c
+		close(shutdownChan)
+	}()
 
 	// Listen on the vector output socket path and accept any connections
 	go ListenOnUDSSocket(vectorOutputSocketPath, listenForeverAndPrintThroughput, errChan)
 
-	log.Println("Going to start vector...")
-	cmd, stdoutAndStderrBytes, err := startVectorWithConfig(config)
+	vectorRunner := NewVectorRunner(GenerateVectorConfig())
+	err := vectorRunner.Start()
 	if err != nil {
 		log.Panicln(err)
 	}
-	defer cmd.Process.Kill()
+	defer vectorRunner.Stop()
 
-	waitAndPrintOutput(cmd, stdoutAndStderrBytes)
+	go vectorRunner.PrintOutputToStdout("\t")
 
 	// Connect to vector's input socket with 5 retries (timing)
 	writer, err := ConnectToUDSSocket(vectorInputSocketPath, 5)
@@ -154,8 +104,14 @@ func main() {
 
 	go sendFakeLogDataForever(writer, errChan)
 
-	anyErr := <-errChan
-	if anyErr != nil {
-		log.Panicln(anyErr)
+	for {
+		select {
+		case <-shutdownChan:
+			return
+		case err = <-errChan:
+			if err != nil {
+				log.Panicln(err)
+			}
+		}
 	}
 }
